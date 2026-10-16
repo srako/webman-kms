@@ -1,6 +1,6 @@
 {
   "name": "srako/webman-kms",
-  "description": "Aliyun KMS local-agent (sidecar) secrets client for webman: fetch MySQL/Redis credentials from the local secretsmanager agent with memory + file caching and graceful fallback.",
+  "description": "Aliyun KMS local-agent (sidecar) secrets client for webman: fetch MySQL/Redis credentials from the local secretsmanager agent with in-process memory caching, automatic rotation reload and graceful fallback.",
   "type": "library",
   "license": "MIT",
   "keywords": [

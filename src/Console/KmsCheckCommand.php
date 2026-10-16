@@ -13,13 +13,12 @@ class KmsCheckCommand extends Command
 {
     protected static $defaultName = 'kms:check';
 
-    protected static $defaultDescription = 'Check KMS agent connectivity, secrets, cache and connections';
+    protected static $defaultDescription = 'Check KMS agent connectivity, secrets and connections';
 
     protected function configure(): void
     {
         $this->addOption('secret', 's', InputOption::VALUE_REQUIRED, 'Only check the given alias or secretId');
-        $this->addOption('fresh', null, InputOption::VALUE_NONE, 'Bypass memory/file cache and fetch from the agent');
-        $this->addOption('warm', null, InputOption::VALUE_NONE, 'Warm up and persist the cache (for deploy scripts)');
+        $this->addOption('fresh', null, InputOption::VALUE_NONE, 'Bypass process memory cache and fetch from the agent');
         $this->addOption('test-connections', null, InputOption::VALUE_NONE, 'Test database / redis connections with resolved credentials');
         $this->addOption('json', null, InputOption::VALUE_NONE, 'Output as JSON');
     }
@@ -28,7 +27,6 @@ class KmsCheckCommand extends Command
     {
         $json = (bool)$input->getOption('json');
         $fresh = (bool)$input->getOption('fresh');
-        $warm = (bool)$input->getOption('warm');
         $testConnections = (bool)$input->getOption('test-connections');
         $only = (string)($input->getOption('secret') ?? '');
 
@@ -64,16 +62,13 @@ class KmsCheckCommand extends Command
         foreach ($targets as $target) {
             $row = Kms::diagnose($target, $fresh);
             $checks[] = $row;
-            // stale = agent 拉取失败、靠过期缓存兜底，自检/部署门禁必须视为失败
-            if ($row['source'] === 'unavailable' || $row['source'] === 'stale') {
+            // unavailable = 拉取失败（无落盘兜底），自检/部署门禁必须视为失败
+            if ($row['source'] === 'unavailable') {
                 $exitCode = max($exitCode, 2);
             }
         }
 
-        $cacheProbe = $this->probeCache((string)($checks[0]['cache_path'] ?? ''));
-        if ($cacheProbe['writable'] === false) {
-            $exitCode = max($exitCode, 2);
-        }
+        $monitorInterval = (int)($config['monitor_interval'] ?? 60);
 
         $connections = [];
         if ($testConnections) {
@@ -91,29 +86,18 @@ class KmsCheckCommand extends Command
                 'endpoint' => $endpoint,
                 'token_file' => $tokenFile,
                 'token_readable' => $tokenFile !== '' && is_readable($tokenFile),
+                'monitor_interval' => $monitorInterval,
                 'checks' => $checks,
-                'cache' => $cacheProbe,
                 'connections' => $connections,
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
             return $exitCode;
         }
 
-        if ($warm) {
-            $output->writeln(sprintf(
-                'kms cache warmed: %d secret(s), cache_dir=%s (%s), exit=%d',
-                count($checks),
-                (string)$cacheProbe['dir'],
-                $cacheProbe['writable'] === true ? 'writable' : 'NOT writable',
-                $exitCode
-            ));
-            return $exitCode;
-        }
-
         $output->writeln('endpoint: ' . $endpoint);
         $output->writeln(sprintf('token_file: %s (%s)', $tokenFile, ($tokenFile !== '' && is_readable($tokenFile)) ? 'readable' : 'NOT readable'));
-        if ($cacheProbe['dir'] !== null) {
-            $output->writeln(sprintf('cache_dir: %s (%s)', $cacheProbe['dir'], $cacheProbe['writable'] === true ? 'writable' : 'NOT writable'));
-        }
+        $output->writeln($monitorInterval > 0
+            ? "rotation monitor: every {$monitorInterval}s (auto reload on rotation/recovery)"
+            : 'rotation monitor: disabled (rotation requires manual `php webman reload`)');
 
         $table = new Table($output);
         $table->setHeaders(['alias', 'secret_id', 'source', 'version_id', 'age(s)', 'username', 'password']);
@@ -138,25 +122,6 @@ class KmsCheckCommand extends Command
         }
 
         return $exitCode;
-    }
-
-    /**
-     * 缓存目录可写性探针：暴露"跨用户写不进 runtime/kms"这类静默失效。
-     *
-     * @return array{dir: ?string, writable: ?bool}
-     */
-    private function probeCache(string $firstCachePath): array
-    {
-        if ($firstCachePath === '') {
-            return ['dir' => null, 'writable' => null];
-        }
-        $dir = dirname($firstCachePath);
-        $probe = $dir . '/.probe.' . getmypid();
-        $writable = is_dir($dir) && @file_put_contents($probe, 'ok') !== false;
-        if ($writable) {
-            @unlink($probe);
-        }
-        return ['dir' => $dir, 'writable' => $writable];
     }
 
     /**

@@ -11,13 +11,13 @@ use Srako\WebmanKms\Support\Logger;
  * 为总开关（默认 false，同时是 webman 插件加载门控）；未启用时所有调用直接返回
  * null，调用方（config 文件）以 `??` 回退到 env.yaml 明文，本地开发零影响。
  *
- * 解析链：内存缓存(TTL 内) -> 文件缓存(未过期) -> HTTP 拉取 -> 过期文件缓存(告警) -> null。
+ * 解析链：进程内内存缓存(TTL 内) -> HTTP 拉取 -> null（strict=true 时抛异常）。
+ * 凭据不落盘；密钥轮换由 RotationMonitor 进程检测并触发 webman 优雅 reload。
  */
 class Kms
 {
     private static ?array $config = null;
     private static ?Client $client = null;
-    private static ?SecretCache $cache = null;
 
     /** @var array<string, array{data: array, version_id: ?string, source: string, fetched_at: int}> */
     private static array $memory = [];
@@ -65,7 +65,6 @@ class Kms
         $app['enable'] = ($app['enable'] ?? false) === true;
         static::$config = $app;
         static::$client = null;
-        static::$cache = null;
 
         return static::$config;
     }
@@ -79,6 +78,23 @@ class Kms
     {
         $entry = static::normalizeSecret(static::config()['secrets'][$alias] ?? null);
         return $entry['secret_id'] ?? null;
+    }
+
+    /**
+     * 已配置的全部 secretId（去重；供轮换监控等使用）。
+     *
+     * @return array<int, string>
+     */
+    public static function secretIds(): array
+    {
+        $ids = [];
+        foreach ((array)(static::config()['secrets'] ?? []) as $raw) {
+            $entry = static::normalizeSecret($raw);
+            if ($entry !== null) {
+                $ids[$entry['secret_id']] = true;
+            }
+        }
+        return array_keys($ids);
     }
 
     /**
@@ -128,6 +144,22 @@ class Kms
     }
 
     /**
+     * 版本指纹：直连代理拉取（不读写内存缓存），返回 VersionId；代理未返回时
+     * 退化为 SecretData 的 sha1。失败返回 null（Client 已告警）。
+     */
+    public static function fingerprint(string $secretId): ?string
+    {
+        if (!static::enabled()) {
+            return null;
+        }
+        $fetched = static::client()->fetch($secretId);
+        if ($fetched === null) {
+            return null;
+        }
+        return $fetched['version_id'] ?? 'sha1:' . sha1(serialize($fetched['data']));
+    }
+
+    /**
      * 诊断信息（kms:check 使用；绝不包含明文密码）。
      */
     public static function diagnose(string $aliasOrSecretId, bool $fresh = false): array
@@ -142,7 +174,6 @@ class Kms
             'username' => '',
             'password_len' => 0,
             'password_sha1' => null,
-            'cache_path' => null,
         ];
         if (($config['enable'] ?? false) !== true) {
             return $result;
@@ -159,7 +190,6 @@ class Kms
             ];
         }
         $result['secret_id'] = $entry['secret_id'];
-        $result['cache_path'] = static::cache()->path($entry['secret_id']);
 
         $resolved = static::resolve($entry['secret_id'], $fresh);
         if ($resolved === null) {
@@ -188,7 +218,6 @@ class Kms
     {
         static::$config = null;
         static::$client = null;
-        static::$cache = null;
         static::$memory = [];
         static::$negative = [];
         static::$lastWarn = [];
@@ -227,52 +256,30 @@ class Kms
             if ($memory !== null && time() - $memory['fetched_at'] <= $ttl) {
                 return $memory;
             }
-        }
 
-        if (!$fresh) {
             $cooldown = max(0, (int)($config['fail_cooldown'] ?? 30));
             $failedAt = static::$negative[$secretId] ?? null;
             if ($failedAt !== null && time() - $failedAt < $cooldown) {
-                return static::fromStaleCache($secretId);
-            }
-
-            $cached = static::cache()->get($secretId);
-            if ($cached !== null) {
-                return static::remember($secretId, $cached['data'], $cached['version_id'], 'file', $cached['fetched_at']);
+                // 近期拉取失败（已告警过）：冷却期内不重试；恢复由轮换监控触发 reload
+                if (($config['strict'] ?? false) === true) {
+                    throw new \RuntimeException("webman-kms: unable to fetch secret [{$secretId}] (in fail cooldown)");
+                }
+                return null;
             }
         }
 
         $fetched = static::client()->fetch($secretId);
         if ($fetched !== null) {
-            static::cache()->put($secretId, $fetched['version_id'], $fetched['data']);
             unset(static::$negative[$secretId]);
             return static::remember($secretId, $fetched['data'], $fetched['version_id'], 'fresh', time());
         }
 
         static::$negative[$secretId] = time();
-        $stale = static::fromStaleCache($secretId);
-        if ($stale !== null) {
-            static::warn($secretId, 'kms agent unavailable, falling back to stale cache');
-            return $stale;
-        }
-
-        static::warn($secretId, 'kms secret unavailable and no cached copy');
+        static::warn($secretId, 'kms secret unavailable (agent unreachable or secret not found)');
         if (($config['strict'] ?? false) === true) {
-            throw new \RuntimeException("webman-kms: unable to fetch secret [{$secretId}] and no cache available");
+            throw new \RuntimeException("webman-kms: unable to fetch secret [{$secretId}]");
         }
         return null;
-    }
-
-    /**
-     * @return array{data: array, version_id: ?string, source: string, fetched_at: int}|null
-     */
-    private static function fromStaleCache(string $secretId): ?array
-    {
-        $cached = static::cache()->getStale($secretId);
-        if ($cached === null) {
-            return null;
-        }
-        return static::remember($secretId, $cached['data'], $cached['version_id'], 'stale', $cached['fetched_at']);
     }
 
     /**
@@ -291,11 +298,6 @@ class Kms
     private static function client(): Client
     {
         return static::$client ??= new Client(static::config());
-    }
-
-    private static function cache(): SecretCache
-    {
-        return static::$cache ??= new SecretCache(max(0, (int)(static::config()['cache_ttl'] ?? 3600)));
     }
 
     private static function warn(string $secretId, string $message, array $context = []): void
