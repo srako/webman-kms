@@ -14,17 +14,6 @@ Webman 通用 composer 包：从**阿里云 KMS 本地代理（sidecar）**获�
 composer require srako/webman-kms
 ```
 
-本地联调（未发布 packagist 时）在被接入项目的 `composer.json` 增加 path 仓库：
-
-```json
-"repositories": [
-    { "type": "path", "url": "../../../study/webman-kms", "options": { "symlink": false } }
-],
-"require": {
-    "srako/webman-kms": "^0.1"
-}
-```
-
 安装时 webman 插件机制会把 `config/plugin/srako/kms/{app.php,command.php}` 拷入项目。
 
 ## 配置（env.yaml，按环境由 Nacos 下发）
@@ -98,11 +87,3 @@ php webman kms:check --json                 # 机器可读输出
 - `strict: true`：已启用但取不到且无缓存时抛异常中断启动（默认 false，保持韧性）
 - **轮换感知**：配置仅在进程启动时加载一次；KMS 轮换后需 `php webman reload`。可选 cron 定时 `php webman kms:check --warm` 保持缓存热
 
-## 本地开发
-
-本地没有 KMS 代理：**不要**在本地 env.yaml 配置 `kms.enable: true`（或指向 mock），否则会回退明文并产生告警。需要用 mock 联调时代理：
-
-```bash
-MOCK_SECRETS_FILE=/tmp/kms-mock-secrets.json MOCK_TOKEN_FILE=/tmp/kmstoken \
-php -S 127.0.0.1:2025 examples/mock-kms-agent.php
-```
