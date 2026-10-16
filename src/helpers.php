@@ -4,7 +4,7 @@ use Srako\WebmanKms\Kms;
 
 if (!function_exists('kms_enabled')) {
     /**
-     * KMS 是否已启用（env.yaml 中 kms.enable === true）。
+     * KMS 是否已启用（config/plugin/srako/kms/app.php 中 enable === true）。
      */
     function kms_enabled(): bool
     {

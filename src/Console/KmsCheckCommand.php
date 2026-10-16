@@ -36,10 +36,10 @@ class KmsCheckCommand extends Command
             if ($json) {
                 $output->writeln(json_encode([
                     'enabled' => false,
-                    'message' => 'kms disabled (no `kms.enable: true` in env.yaml); plaintext fallback is in effect',
+                    'message' => 'kms disabled (`enable` is not true in config/plugin/srako/kms/app.php); plaintext fallback is in effect',
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             } else {
-                $output->writeln('<comment>kms disabled (no `kms.enable: true` in env.yaml); plaintext fallback is in effect</comment>');
+                $output->writeln('<comment>kms disabled (`enable` is not true in config/plugin/srako/kms/app.php); plaintext fallback is in effect</comment>');
             }
             return self::SUCCESS;
         }
@@ -50,7 +50,7 @@ class KmsCheckCommand extends Command
         if ($only !== '') {
             $targets = [$only];
         } elseif ($secrets === []) {
-            $output->writeln('<error>kms enabled but no `kms.secrets` configured in env.yaml</error>');
+            $output->writeln('<error>kms enabled but no `secrets` configured in config/plugin/srako/kms/app.php</error>');
             return 1;
         } else {
             $targets = $secrets;

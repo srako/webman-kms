@@ -1,9 +1,9 @@
 <?php
 
 return [
-    // webman 插件加载门控（仅控制本插件 config/command 等被加载）；
-    // KMS 总开关是 env.yaml 的 `kms.enable`，不要把两者混淆。
-    'enable' => true,
+    // 总开关（同时是 webman 插件加载门控）：false 时本插件配置与 kms:check
+    // 命令都不会加载，所有调用直接返回 null（调用方回退 env.yaml 明文）。
+    'enable' => false,
 
     // KMS 本地代理地址
     'endpoint' => 'http://localhost:2025/secretsmanager/get',
@@ -29,6 +29,8 @@ return [
     'pass_field' => 'AccountPassword',
 
     // alias => secretId 或 ['secret_id' => ..., 'include_username' => false, 'user_field' => ..., 'pass_field' => ...]
-    // 实际映射写在各环境 env.yaml 的 `kms.secrets` 段（Nacos 管理）
+    // 按环境不同的映射直接写在本文件；示例：
+    // 'mysql' => 'test-mysql8',
+    // 'redis' => ['secret_id' => 'test-redis', 'include_username' => true],
     'secrets' => [],
 ];

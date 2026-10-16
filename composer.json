@@ -12,8 +12,7 @@
   "require": {
     "php": ">=8.2",
     "workerman/webman-framework": "^2.0",
-    "webman/console": "^2.0",
-    "symfony/yaml": "^6.0 || ^7.0"
+    "webman/console": "^2.0"
   },
   "suggest": {
     "ext-curl": "Preferred HTTP transport for the KMS agent (stream fallback is used when curl is unavailable)"

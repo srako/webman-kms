@@ -16,25 +16,28 @@ composer require srako/webman-kms
 
 安装时 webman 插件机制会把 `config/plugin/srako/kms/{app.php,command.php}` 拷入项目。
 
-## 配置（env.yaml，按环境由 Nacos 下发）
+## 配置（config/plugin/srako/kms/app.php）
 
-```yaml
-kms:
-  enable: true                                    # 总开关；无此段 = 未启用，全部回退明文
-  endpoint: http://localhost:2025/secretsmanager/get
-  token_file: /var/run/kmstoken
-  timeout: 3
-  cache_ttl: 3600
-  secrets:
-    mysql: test-mysql8                            # 简写：使用 AccountName / AccountPassword
-    redis:
-      secret_id: test-redis
-      include_username: true                      # ACL 模式用；经典模式改 false
-      # user_field: AccountName                   # 可选，字段名不标准时覆盖
-      # pass_field: AccountPassword
+```php
+return [
+    'enable' => true,                              // 总开关；false = 全部回退 env.yaml 明文
+    'endpoint' => 'http://localhost:2025/secretsmanager/get',
+    'token_file' => '/var/run/kmstoken',
+    'timeout' => 3,
+    'cache_ttl' => 3600,
+    'secrets' => [
+        'mysql' => 'test-mysql8',                  // 简写：使用 AccountName / AccountPassword
+        'redis' => [
+            'secret_id' => 'test-redis',
+            'include_username' => true,            // ACL 模式用；经典模式改 false
+            // 'user_field' => 'AccountName',      // 可选，字段名不标准时覆盖
+            // 'pass_field' => 'AccountPassword',
+        ],
+    ],
+];
 ```
 
-> `kms:` 段必须同时加到 Nacos 侧 env.yaml 内容里，否则 Nacos 推送覆盖本地文件后会静默失效（安全回退明文）。
+> 安装时插件会把默认配置拷入宿主项目的 `config/plugin/srako/kms/app.php`，直接编辑该文件即可；修改后 `php webman reload` 生效。kms 配置不再经 env.yaml / Nacos 下发。
 
 ## 接入示例
 
@@ -62,7 +65,7 @@ $kmsRedis = kms_credentials('redis');
 | --- | --- |
 | `kms_credentials($alias)` | `['username' => ..., 'password' => ...]`；未启用/未配置/失败时 `null` |
 | `kms_secret($secretId, $fresh = false)` | 原始 SecretData 数组（供其它用途复用） |
-| `kms_enabled()` | `env.yaml` 中 `kms.enable === true` |
+| `kms_enabled()` | `config/plugin/srako/kms/app.php` 中 `enable === true` |
 | `kms_redis_auth($creds)` | ACL → `['user'=>..., 'pass'=>...]`；经典 → 纯密码串；无凭据 → `null` |
 
 ## 命令
@@ -75,7 +78,7 @@ php webman kms:check --warm                 # 预热并落盘缓存（部署脚�
 php webman kms:check --json                 # 机器可读输出
 ```
 
-退出码：`0` 正常（含未启用）；`1` 已启用但未配置 secrets；`2` 拉取失败、stale 降级或缓存目录不可写；`3` 连接测试失败。
+退出码：`0` 正常；`1` 已启用但未配置 secrets；`2` 拉取失败、stale 降级或缓存目录不可写；`3` 连接测试失败。
 
 ## 解析链与回退语义
 

@@ -7,16 +7,15 @@ use Srako\WebmanKms\Support\Logger;
 /**
  * KMS 门面。
  *
- * 配置来源：插件默认配置 config/plugin/srako/kms/app.php，被 env.yaml 的 `kms:` 段
- * 按环境覆盖（Nacos 可管）。`kms.enable` 为总开关，未启用时所有调用直接返回 null，
- * 调用方（config 文件）以 `??` 回退到 env.yaml 明文，本地开发零影响。
+ * 配置来源：config/plugin/srako/kms/app.php（安装时由插件拷入宿主项目）。`enable`
+ * 为总开关（默认 false，同时是 webman 插件加载门控）；未启用时所有调用直接返回
+ * null，调用方（config 文件）以 `??` 回退到 env.yaml 明文，本地开发零影响。
  *
  * 解析链：内存缓存(TTL 内) -> 文件缓存(未过期) -> HTTP 拉取 -> 过期文件缓存(告警) -> null。
  */
 class Kms
 {
     private static ?array $config = null;
-    private static ?string $configSignature = null;
     private static ?Client $client = null;
     private static ?SecretCache $cache = null;
 
@@ -31,8 +30,7 @@ class Kms
 
     public static function config(): array
     {
-        $signature = Environment::signature();
-        if (static::$config !== null && static::$configSignature === $signature) {
+        if (static::$config !== null) {
             return static::$config;
         }
 
@@ -64,21 +62,8 @@ class Kms
             $app = is_array($loaded) ? $loaded : [];
         }
 
-        $env = Environment::section('kms', []);
-        if (!is_array($env)) {
-            $env = [];
-        }
-
-        if (static::$config !== null) {
-            // env.yaml 内容变化（Nacos 覆盖/本地编辑）：丢弃进程内缓存，避免沿用旧映射
-            static::$memory = [];
-            static::$negative = [];
-        }
-
-        static::$config = array_replace_recursive($app, $env);
-        // enable 只认 env.yaml：app.php 里的 enable 仅是 webman 插件加载门控
-        static::$config['enable'] = ($env['enable'] ?? false) === true;
-        static::$configSignature = $signature;
+        $app['enable'] = ($app['enable'] ?? false) === true;
+        static::$config = $app;
         static::$client = null;
         static::$cache = null;
 
@@ -97,7 +82,7 @@ class Kms
     }
 
     /**
-     * 凭据（alias 由 env.yaml 的 kms.secrets 配置）。
+     * 凭据（alias 由 app.php 的 secrets 配置）。
      *
      * @return array{username: string, password: string}|null
      */
@@ -202,13 +187,11 @@ class Kms
     public static function flush(): void
     {
         static::$config = null;
-        static::$configSignature = null;
         static::$client = null;
         static::$cache = null;
         static::$memory = [];
         static::$negative = [];
         static::$lastWarn = [];
-        Environment::reset();
     }
 
     /**
