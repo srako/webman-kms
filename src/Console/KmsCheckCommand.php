@@ -64,9 +64,15 @@ class KmsCheckCommand extends Command
         foreach ($targets as $target) {
             $row = Kms::diagnose($target, $fresh);
             $checks[] = $row;
-            if ($row['source'] === 'unavailable') {
+            // stale = agent 拉取失败、靠过期缓存兜底，自检/部署门禁必须视为失败
+            if ($row['source'] === 'unavailable' || $row['source'] === 'stale') {
                 $exitCode = max($exitCode, 2);
             }
+        }
+
+        $cacheProbe = $this->probeCache((string)($checks[0]['cache_path'] ?? ''));
+        if ($cacheProbe['writable'] === false) {
+            $exitCode = max($exitCode, 2);
         }
 
         $connections = [];
@@ -86,18 +92,28 @@ class KmsCheckCommand extends Command
                 'token_file' => $tokenFile,
                 'token_readable' => $tokenFile !== '' && is_readable($tokenFile),
                 'checks' => $checks,
+                'cache' => $cacheProbe,
                 'connections' => $connections,
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
             return $exitCode;
         }
 
         if ($warm) {
-            $output->writeln(sprintf('kms cache warmed: %d secret(s), exit=%d', count($checks), $exitCode));
+            $output->writeln(sprintf(
+                'kms cache warmed: %d secret(s), cache_dir=%s (%s), exit=%d',
+                count($checks),
+                (string)$cacheProbe['dir'],
+                $cacheProbe['writable'] === true ? 'writable' : 'NOT writable',
+                $exitCode
+            ));
             return $exitCode;
         }
 
         $output->writeln('endpoint: ' . $endpoint);
         $output->writeln(sprintf('token_file: %s (%s)', $tokenFile, ($tokenFile !== '' && is_readable($tokenFile)) ? 'readable' : 'NOT readable'));
+        if ($cacheProbe['dir'] !== null) {
+            $output->writeln(sprintf('cache_dir: %s (%s)', $cacheProbe['dir'], $cacheProbe['writable'] === true ? 'writable' : 'NOT writable'));
+        }
 
         $table = new Table($output);
         $table->setHeaders(['alias', 'secret_id', 'source', 'version_id', 'age(s)', 'username', 'password']);
@@ -122,6 +138,25 @@ class KmsCheckCommand extends Command
         }
 
         return $exitCode;
+    }
+
+    /**
+     * 缓存目录可写性探针：暴露"跨用户写不进 runtime/kms"这类静默失效。
+     *
+     * @return array{dir: ?string, writable: ?bool}
+     */
+    private function probeCache(string $firstCachePath): array
+    {
+        if ($firstCachePath === '') {
+            return ['dir' => null, 'writable' => null];
+        }
+        $dir = dirname($firstCachePath);
+        $probe = $dir . '/.probe.' . getmypid();
+        $writable = is_dir($dir) && @file_put_contents($probe, 'ok') !== false;
+        if ($writable) {
+            @unlink($probe);
+        }
+        return ['dir' => $dir, 'writable' => $writable];
     }
 
     /**

@@ -2,9 +2,12 @@
 
 namespace Srako\WebmanKms;
 
+use Srako\WebmanKms\Support\Logger;
+
 /**
  * 文件缓存：runtime/kms/<sanitized-secret-id>.json。
  * 目录 0700、文件 0600，tmp+rename 原子写；缓存内含明文密码（与 env.yaml 明文本同级）。
+ * 任何落盘/读取失败都会告警（不阻断），避免缓存能力静默失效（如跨用户权限问题）。
  */
 class SecretCache
 {
@@ -36,6 +39,9 @@ class SecretCache
         if (!is_dir($dir)) {
             @mkdir($dir, 0700, true);
             @chmod($dir, 0700);
+        }
+        if (!is_dir($dir) || !is_writable($dir)) {
+            Logger::warning('kms cache dir is not writable, file cache disabled for this process (check runtime/kms permission/user)', ['dir' => $dir]);
         }
         return $this->dir = $dir;
     }
@@ -69,7 +75,7 @@ class SecretCache
         return $this->read($secretId);
     }
 
-    public function put(string $secretId, ?string $versionId, array $data): void
+    public function put(string $secretId, ?string $versionId, array $data): bool
     {
         $file = $this->path($secretId);
         $payload = json_encode([
@@ -79,21 +85,35 @@ class SecretCache
             'data' => $data,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payload === false) {
-            return;
+            Logger::warning('kms cache encode failed', ['secret' => $secretId]);
+            return false;
         }
 
         $tmp = $file . '.tmp.' . getmypid();
         if (@file_put_contents($tmp, $payload) === false) {
-            return;
+            Logger::warning('kms cache write failed, file cache unavailable (check runtime/kms permission/user)', ['file' => $tmp]);
+            return false;
         }
-        @chmod($tmp, 0600);
-        @rename($tmp, $file);
+        if (!@chmod($tmp, 0600)) {
+            Logger::warning('kms cache chmod 0600 failed', ['file' => $tmp]);
+        }
+        if (!@rename($tmp, $file)) {
+            Logger::warning('kms cache rename failed', ['file' => $file]);
+            @unlink($tmp);
+            return false;
+        }
+        return true;
     }
 
     private function read(string $secretId): ?array
     {
-        $raw = @file_get_contents($this->path($secretId));
+        $file = $this->path($secretId);
+        if (!is_file($file)) {
+            return null;
+        }
+        $raw = @file_get_contents($file);
         if ($raw === false || $raw === '') {
+            Logger::warning('kms cache file exists but is unreadable (check runtime/kms permission/user)', ['file' => $file]);
             return null;
         }
         $entry = json_decode($raw, true);
