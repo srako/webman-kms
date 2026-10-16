@@ -9,7 +9,7 @@ use Srako\WebmanKms\Support\Logger;
  *
  * 协议：GET {endpoint}?secretId=<id>，请求头 X-KMS-Token 取自令牌文件；
  * 响应 JSON 的 SecretData 为 JSON 字符串（需二次 json_decode），字段示例：
- * {"AccountName":"scyy","AccountPassword":"..."}。
+ * {"AccountName":"user","AccountPassword":"..."}。
  */
 class Client
 {

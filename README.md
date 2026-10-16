@@ -37,9 +37,9 @@ kms:
   timeout: 3
   cache_ttl: 3600
   secrets:
-    mysql: scyy-test-mysql8                       # 简写：使用 AccountName / AccountPassword
+    mysql: test-mysql8                            # 简写：使用 AccountName / AccountPassword
     redis:
-      secret_id: scyy-test-redis
+      secret_id: test-redis
       include_username: true                      # ACL 模式用；经典模式改 false
       # user_field: AccountName                   # 可选，字段名不标准时覆盖
       # pass_field: AccountPassword
@@ -63,7 +63,7 @@ $kmsRedis = kms_credentials('redis');
 // config/plugin/webman/redis-queue/redis.php（workerman/redis 原生 client）
 'auth' => kms_redis_auth($kmsRedis) ?? yaml('redis.password'),
 
-// moon-api config/session.php（phpredis 直连，ACL 需关联数组）
+// config/session.php（phpredis 直连，ACL 需关联数组）
 'auth' => kms_redis_auth($kmsRedis) ?? yaml('redis.password'),
 ```
 

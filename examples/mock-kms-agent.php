@@ -8,8 +8,8 @@
  *   php -S 127.0.0.1:2025 examples/mock-kms-agent.php
  *
  * 秘密文件格式（参考 examples/mock-secrets.sample.json）：
- *   {"scyy-test-mysql8": {"AccountName": "web_scyy", "AccountPassword": "..."},
- *    "scyy-test-redis":  {"AccountName": "scyy",     "AccountPassword": "..."}}
+ *   {"test-mysql8": {"AccountName": "web_user", "AccountPassword": "..."},
+ *    "test-redis": {"AccountName": "user",     "AccountPassword": "..."}}
  *
  * 建议用本地 env.yaml 里的真实明文凭据生成该文件，这样 mock 链路之外的
  * 数据库/Redis 连接测试也能真实通过；该文件不要提交到仓库。
