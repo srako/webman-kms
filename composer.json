@@ -1,0 +1,29 @@
+{
+  "name": "srako/webman-kms",
+  "description": "Aliyun KMS local-agent (sidecar) secrets client for webman: fetch MySQL/Redis credentials from the local secretsmanager agent with memory + file caching and graceful fallback.",
+  "type": "library",
+  "license": "MIT",
+  "keywords": [
+    "webman",
+    "kms",
+    "secretsmanager",
+    "aliyun"
+  ],
+  "require": {
+    "php": ">=8.2",
+    "workerman/webman-framework": "^2.0",
+    "webman/console": "^2.0",
+    "symfony/yaml": "^6.0 || ^7.0"
+  },
+  "suggest": {
+    "ext-curl": "Preferred HTTP transport for the KMS agent (stream fallback is used when curl is unavailable)"
+  },
+  "autoload": {
+    "psr-4": {
+      "Srako\\WebmanKms\\": "src"
+    },
+    "files": [
+      "src/helpers.php"
+    ]
+  }
+}
