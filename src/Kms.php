@@ -181,6 +181,11 @@ class Kms
 
         $entry = static::normalizeSecret($config['secrets'][$aliasOrSecretId] ?? null);
         if ($entry === null) {
+            if ($aliasOrSecretId !== '' && array_key_exists($aliasOrSecretId, (array)($config['secrets'] ?? []))) {
+                // alias 已配置但未解析出 secret_id（如 env.yaml 缺 key）：配置问题
+                $result['source'] = 'unconfigured';
+                return $result;
+            }
             // 直接传了 secretId：按默认字段检查
             $entry = [
                 'secret_id' => $aliasOrSecretId,
@@ -191,7 +196,12 @@ class Kms
         }
         $result['secret_id'] = $entry['secret_id'];
 
-        $resolved = static::resolve($entry['secret_id'], $fresh);
+        try {
+            $resolved = static::resolve($entry['secret_id'], $fresh);
+        } catch (\RuntimeException) {
+            // 诊断接口不抛异常：strict 模式下同样以 unavailable 呈现
+            $resolved = null;
+        }
         if ($resolved === null) {
             $result['source'] = 'unavailable';
             return $result;
@@ -307,6 +317,6 @@ class Kms
             return;
         }
         static::$lastWarn[$secretId] = $now;
-        Logger::warning($message, ['secret' => $secretId] + $context);
+        Logger::warning($message, ['kms_id' => $secretId] + $context);
     }
 }

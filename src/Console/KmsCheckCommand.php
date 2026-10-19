@@ -62,9 +62,11 @@ class KmsCheckCommand extends Command
         foreach ($targets as $target) {
             $row = Kms::diagnose($target, $fresh);
             $checks[] = $row;
-            // unavailable = 拉取失败（无落盘兜底），自检/部署门禁必须视为失败
+            // unavailable = 拉取失败（无落盘兜底）；unconfigured = alias 未解析出 secret_id
             if ($row['source'] === 'unavailable') {
                 $exitCode = max($exitCode, 2);
+            } elseif ($row['source'] === 'unconfigured') {
+                $exitCode = max($exitCode, 1);
             }
         }
 

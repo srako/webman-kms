@@ -50,7 +50,7 @@ class Client
         [$status, $body] = $this->request($url, $token);
         if ($status !== 200 || $body === null || $body === '') {
             Logger::warning('kms agent request failed', [
-                'secret' => $secretId,
+                'kms_id' => $secretId,
                 'status' => $status,
                 'body' => $body === null ? null : mb_substr($body, 0, 200),
             ]);
@@ -59,14 +59,14 @@ class Client
 
         $response = json_decode($body, true);
         if (!is_array($response)) {
-            Logger::warning('kms agent response is not valid json', ['secret' => $secretId]);
+            Logger::warning('kms agent response is not valid json', ['kms_id' => $secretId]);
             return null;
         }
 
         $data = $this->extractData($response['SecretData'] ?? null);
         if ($data === null) {
             Logger::warning('kms secret data missing or unresolvable', [
-                'secret' => $secretId,
+                'kms_id' => $secretId,
                 'code' => isset($response['Code']) ? (string)$response['Code'] : null,
                 'message' => isset($response['Message']) ? mb_substr((string)$response['Message'], 0, 200) : null,
             ]);
@@ -116,6 +116,34 @@ class Client
     }
 
     /**
+     * 非协程上下文（CLI / 插件进程）复用同一句柄，避免轮询场景反复新建
+     * CurlHandle；协程上下文（Swoole/Swow/native curl hook）并发时会串用
+     * 同一 easy handle，必须按请求新建。
+     */
+    private function curlHandle(): \CurlHandle
+    {
+        if (static::inCoroutine()) {
+            return curl_init();
+        }
+        return $this->handle ??= curl_init();
+    }
+
+    private static function inCoroutine(): bool
+    {
+        try {
+            if (class_exists(\Swoole\Coroutine::class, false) && \Swoole\Coroutine::getCid() > 0) {
+                return true;
+            }
+            if (class_exists(\Workerman\Coroutine::class) && \Workerman\Coroutine::isCoroutine()) {
+                return true;
+            }
+        } catch (\Throwable) {
+            // 运行时探测失败时按非协程处理（保底走句柄复用）
+        }
+        return false;
+    }
+
+    /**
      * @return array{0: int, 1: ?string}
      */
     private function request(string $url, string $token): array
@@ -126,7 +154,7 @@ class Client
         // 全程复用同一个句柄（curl_reset 重置后重设全部选项），轮询场景下
         // 不再按请求创建 CurlHandle / 连接对象。
         if (function_exists('curl_init')) {
-            $ch = $this->handle ??= curl_init();
+            $ch = $this->curlHandle();
             curl_reset($ch);
             curl_setopt_array($ch, [
                 CURLOPT_URL => $url,

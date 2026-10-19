@@ -41,6 +41,7 @@ class RotationMonitor
         }
         $secretIds = Kms::secretIds();
         if ($secretIds === []) {
+            Logger::warning('kms rotation monitor idle: no resolvable secret ids in `secrets` config');
             return;
         }
         // 启动即建立基线（首次不触发 reload）
@@ -137,6 +138,8 @@ class RotationMonitor
             Logger::warning('kms rotation monitor: graceful reload not supported on this platform, please restart manually');
             return;
         }
-        posix_kill(posix_getppid(), SIGUSR1);
+        if (!posix_kill(posix_getppid(), SIGUSR1)) {
+            Logger::warning('kms rotation monitor: failed to signal master for graceful reload');
+        }
     }
 }

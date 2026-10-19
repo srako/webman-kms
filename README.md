@@ -15,7 +15,7 @@ Webman 通用 composer 包：从**阿里云 KMS 本地代理（sidecar）**获�
 composer require srako/webman-kms
 ```
 
-安装时 webman 插件机制会把 `config/plugin/srako/kms/{app.php,command.php,process.php}` 拷入项目；之后 `composer update` 只补齐缺失文件，不会覆盖已改过的 `app.php`。
+安装时 webman 插件机制会把 `config/plugin/srako/kms/{app.php,command.php,process.php}` 拷入项目；之后 `composer update` 只补齐缺失文件，不会覆盖已存在的文件（`command.php` / `process.php` 如需随包升级，请手动同步）。
 
 ## 配置（config/plugin/srako/kms/app.php）
 
@@ -81,7 +81,7 @@ php webman kms:check --test-connections     # 附加数据库 SELECT 1 与 Redis
 php webman kms:check --json                 # 机器可读输出
 ```
 
-退出码：`0` 正常（含未启用）；`1` 已启用但未配置 secrets；`2` 拉取失败；`3` 连接测试失败。
+退出码：`0` 正常（含未启用）；`1` 已启用但未配置 secrets（或 alias 的 secret_id 为空）；`2` 拉取失败；`3` 连接测试失败。
 
 ## 解析链与回退语义
 
@@ -91,7 +91,7 @@ php webman kms:check --json                 # 机器可读输出
 
 - 拉取失败后有 `fail_cooldown`（默认 30s）负缓存，避免启动期反复请求挂起的代理
 - 凭据不落盘：没有文件缓存、没有 `--warm`；进程重启后首次使用即直连代理解析
-- `strict: true`：已启用但取不到时报错中断启动（默认 false 保持韧性；从 env.yaml 删除明文后建议开启）
+- `strict: true`：已启用但取不到时报错中断启动（默认 false 保持韧性；从 env.yaml 删除明文后建议开启）。注意代理不可用时，依赖 `kms_credentials()` 的宿主 config 会在 bootstrap 阶段抛异常，`kms:check` 等 CLI 命令同样无法启动——排查时先恢复代理或临时置 `strict: false`
 
 ## 密钥轮换监控
 
