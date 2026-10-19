@@ -134,7 +134,7 @@ class Client
             if (class_exists(\Swoole\Coroutine::class, false) && \Swoole\Coroutine::getCid() > 0) {
                 return true;
             }
-            if (class_exists(\Workerman\Coroutine::class) && \Workerman\Coroutine::isCoroutine()) {
+            if (class_exists(\Workerman\Coroutine::class, false) && \Workerman\Coroutine::isCoroutine()) {
                 return true;
             }
         } catch (\Throwable) {
