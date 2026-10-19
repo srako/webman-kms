@@ -13,6 +13,14 @@ use Srako\WebmanKms\Support\Logger;
  */
 class Client
 {
+    /**
+     * 复用的 curl 句柄：轮换监控会高频轮询，复用句柄避免每次请求新建
+     * CurlHandle / 连接对象（句柄级连接缓存在进程内是有界且可预期的）。
+     *
+     * @var \CurlHandle|null
+     */
+    private $handle = null;
+
     public function __construct(
         private readonly array $config
     ) {
@@ -114,10 +122,14 @@ class Client
     {
         $timeout = max(1, (int)($this->config['timeout'] ?? 3));
 
-        // 优先 curl：不受 swoole hook 影响，worker 启动/协程内调用都安全
+        // 优先 curl：不受 swoole hook 影响，worker 启动/协程内调用都安全。
+        // 全程复用同一个句柄（curl_reset 重置后重设全部选项），轮询场景下
+        // 不再按请求创建 CurlHandle / 连接对象。
         if (function_exists('curl_init')) {
-            $ch = curl_init($url);
+            $ch = $this->handle ??= curl_init();
+            curl_reset($ch);
             curl_setopt_array($ch, [
+                CURLOPT_URL => $url,
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT => $timeout,
                 CURLOPT_CONNECTTIMEOUT => min(2, $timeout),
@@ -127,7 +139,6 @@ class Client
             $body = curl_exec($ch);
             $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             $error = curl_error($ch);
-            curl_close($ch);
             if ($body === false) {
                 Logger::warning('kms agent curl error', ['error' => $error]);
                 return [0, null];

@@ -12,11 +12,23 @@ use Workerman\Timer;
  * 周期性直连本地代理比对各 secretId 的版本指纹；检测到轮换（或代理从不可用
  * 恢复）时向 master 发送 SIGUSR1 触发优雅 reload，使各 worker 重新加载配置、
  * 拿到新凭据。`reloadable=false`：自身不随 reload 重启，保留基线避免重复触发。
+ *
+ * 自愈：连续多轮全部拉取失败、或打开 fd 数相对基线异常增长时主动退出，由
+ * webman master 重新拉起一个干净进程（兜底潜在资源泄漏，不依赖具体泄漏点）。
  */
 class RotationMonitor
 {
+    private const FAILURE_LIMIT = 10;
+
+    private const FD_GROWTH_LIMIT = 50;
+
     /** @var array<string, ?string> secretId => 版本指纹（null = 上次拉取失败） */
     private array $fingerprints = [];
+
+    private int $consecutiveFailures = 0;
+
+    /** @var int 首次采样到的 fd 数；0 = 尚未采样 */
+    private int $baselineFds = 0;
 
     public function onWorkerStart(): void
     {
@@ -45,8 +57,12 @@ class RotationMonitor
     {
         $rotated = [];
         $recovered = [];
+        $failures = 0;
         foreach ($secretIds as $secretId) {
             $current = Kms::fingerprint($secretId);
+            if ($current === null) {
+                $failures++;
+            }
             if (!array_key_exists($secretId, $this->fingerprints)) {
                 $this->fingerprints[$secretId] = $current;
                 continue;
@@ -62,6 +78,10 @@ class RotationMonitor
                 $rotated[] = $secretId;
             }
         }
+
+        $this->consecutiveFailures = $failures === count($secretIds) ? $this->consecutiveFailures + 1 : 0;
+        $this->checkSelfHeal();
+
         if ($rotated === [] && $recovered === []) {
             return;
         }
@@ -70,6 +90,45 @@ class RotationMonitor
             'recovered' => $recovered,
         ]);
         static::reload();
+    }
+
+    private function checkSelfHeal(): void
+    {
+        if ($this->consecutiveFailures >= self::FAILURE_LIMIT) {
+            $this->recycle(sprintf('%d consecutive poll failures', $this->consecutiveFailures));
+        }
+        $count = static::openFds();
+        if ($count === null) {
+            return;
+        }
+        if ($this->baselineFds === 0) {
+            $this->baselineFds = $count;
+            return;
+        }
+        if ($count > $this->baselineFds + self::FD_GROWTH_LIMIT) {
+            $this->recycle(sprintf('open fd %d exceeds baseline %d + %d', $count, $this->baselineFds, self::FD_GROWTH_LIMIT));
+        }
+    }
+
+    /**
+     * @return int|null 打开 fd 数；非 Linux（无 /proc）时返回 null
+     */
+    private static function openFds(): ?int
+    {
+        if (DIRECTORY_SEPARATOR !== '/' || !is_dir('/proc/self/fd')) {
+            return null;
+        }
+        $fds = @scandir('/proc/self/fd');
+        return is_array($fds) ? count($fds) - 2 : null;
+    }
+
+    /**
+     * 主动退出，由 webman master 重新 fork 一个干净的监控进程。
+     */
+    private function recycle(string $reason): void
+    {
+        Logger::warning('kms rotation monitor self-heal: exiting for a fresh worker process', ['reason' => $reason]);
+        exit(1);
     }
 
     private static function reload(): void

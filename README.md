@@ -100,6 +100,7 @@ php webman kms:check --json                 # 机器可读输出
 - 每 `monitor_interval` 秒（默认 60s）直连代理比对各 secretId 的版本指纹（VersionId）
 - 检测到轮换、或代理从"不可用"恢复 → 向 master 发送 `SIGUSR1` 触发 webman 优雅 reload，各 worker 重新加载配置拿到新凭据
 - 监控进程不随 reload 重启（保留基线），不会重复触发；`monitor_interval: 0` 关闭监控（轮换后需手动 `php webman reload`）
+- 自愈：连续 10 轮全部拉取失败、或进程打开 fd 数相对基线增长超过 50 时，进程主动退出，由 webman master 自动拉起（Linux `/proc` 环境下检查 fd，兜底任何资源泄漏）
 
 ### 从 env.yaml 明文迁移到 KMS 的建议顺序
 
