@@ -189,7 +189,11 @@ class Client
             return [0, null];
         }
         $status = 0;
-        foreach ($http_response_header ?? [] as $header) {
+        // $http_response_header 自 PHP 8.5 废弃，8.4+ 用新函数；本包仍兼容 8.2。
+        $headers = function_exists('http_get_last_response_headers')
+            ? (http_get_last_response_headers() ?? [])
+            : ($http_response_header ?? []);
+        foreach ($headers as $header) {
             if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $m)) {
                 $status = (int)$m[1];
             }

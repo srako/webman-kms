@@ -40,8 +40,7 @@ class Logger
     private static function sanitize(array $context): array
     {
         foreach ($context as $key => $value) {
-            // 只脱敏凭据类键；secret id 保留（排查需要，本身不是敏感值）
-            if (is_string($key) && preg_match('/pass|token|auth|credential|pwd/i', $key)) {
+            if (is_string($key) && preg_match('/pass|secret|token|auth/i', $key)) {
                 $context[$key] = '***';
             } elseif (is_array($value)) {
                 $context[$key] = static::sanitize($value);
