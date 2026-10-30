@@ -17,10 +17,25 @@ use Srako\WebmanKms\Support\Logger;
 class Kms
 {
     private static ?array $config = null;
+
+    /** 建立 $config 缓存时的进程号：fork 出的 worker 与 master 不一致即重读 */
+    private static ?int $configPid = null;
+
+    /** true = 跳过 webman Config 快照，直接 require app.php（常驻进程感知变更用） */
+    private static bool $readFromFile = false;
+
     private static ?Client $client = null;
 
     /** @var array<string, array{data: array, version_id: ?string, source: string, fetched_at: int}> */
     private static array $memory = [];
+
+    /**
+     * fork 时从父进程继承的最后一次成功凭据：不直接使用（可能已是轮换前的旧值），
+     * 仅在 Agent 不可用时（非 strict）兜底，成功拉取后即丢弃。
+     *
+     * @var array<string, array{data: array, version_id: ?string, source: string, fetched_at: int}>
+     */
+    private static array $inherited = [];
 
     /** @var array<string, int> secretId => failed_at */
     private static array $negative = [];
@@ -30,12 +45,25 @@ class Kms
 
     public static function config(): array
     {
-        if (static::$config !== null) {
+        $pid = static::pid();
+        if (static::$config !== null && static::$configPid === $pid) {
             return static::$config;
         }
 
+        if (static::$config !== null) {
+            // master 在 App::run() 预热过配置与凭据，fork 出的 worker 继承的是旧内存：
+            // 不清掉就会继续用旧 app.php 的 secret_id / 旧密码（Reload 等于没生效）。
+            // 旧凭据留作 Agent 不可用时的兜底（见 resolve），成功拉取后即丢弃。
+            foreach (static::$memory as $id => $entry) {
+                static::$inherited[$id] = ['source' => 'inherited'] + $entry;
+            }
+            static::$memory = [];
+            static::$negative = [];
+            static::$lastWarn = [];
+        }
+
         $app = [];
-        if (function_exists('config')) {
+        if (!static::$readFromFile && function_exists('config')) {
             try {
                 $loaded = \config('plugin.srako.kms.app');
                 if (is_array($loaded)) {
@@ -64,6 +92,7 @@ class Kms
 
         $app['enable'] = ($app['enable'] ?? false) === true;
         static::$config = $app;
+        static::$configPid = $pid;
         static::$client = null;
 
         return static::$config;
@@ -227,10 +256,41 @@ class Kms
     public static function flush(): void
     {
         static::$config = null;
+        static::$configPid = null;
+        static::$readFromFile = false;
         static::$client = null;
         static::$memory = [];
+        static::$inherited = [];
         static::$negative = [];
         static::$lastWarn = [];
+    }
+
+    /**
+     * 丢弃配置缓存，下次调用时直接 require app.php 重读。
+     *
+     * 供不随 reload 重启的常驻进程（rotation_monitor）感知 secret_id 切换：这类
+     * 进程的 webman Config 快照停留在启动时刻，只读 `config()` 拿不到新值。
+     * 同时丢弃 Client，下一轮按新的 endpoint / token_file 重建；worker 侧仍需
+     * reload/restart 才会重读配置。
+     */
+    public static function reloadConfig(): void
+    {
+        static::$config = null;
+        static::$configPid = null;
+        static::$client = null;
+        static::$readFromFile = true;
+    }
+
+    private static function pid(): ?int
+    {
+        if (function_exists('posix_getpid')) {
+            return posix_getpid();
+        }
+        if (function_exists('getmypid')) {
+            $pid = getmypid();
+            return $pid === false ? null : $pid;
+        }
+        return null;
     }
 
     /**
@@ -274,17 +334,26 @@ class Kms
                 if (($config['strict'] ?? false) === true) {
                     throw new \RuntimeException("webman-kms: unable to fetch secret [{$secretId}] (in fail cooldown)");
                 }
-                return null;
+                return static::$inherited[$secretId] ?? null;
             }
         }
 
         $fetched = static::client()->fetch($secretId);
         if ($fetched !== null) {
-            unset(static::$negative[$secretId]);
+            unset(static::$negative[$secretId], static::$inherited[$secretId]);
             return static::remember($secretId, $fetched['data'], $fetched['version_id'], 'fresh', time());
         }
 
         static::$negative[$secretId] = time();
+        $fallback = !$fresh && ($config['strict'] ?? false) !== true ? (static::$inherited[$secretId] ?? null) : null;
+        if ($fallback !== null) {
+            // Agent 不可用：非 strict 下沿用父进程的最后一次成功凭据，避免 reload 撞上
+            // Agent 抖动时拿不到密码 / 回退明文；成功拉取后即换成新值。
+            static::warn($secretId, 'kms secret unavailable, using inherited credentials from parent process', [
+                'stale_age' => max(0, time() - $fallback['fetched_at']),
+            ]);
+            return $fallback;
+        }
         static::warn($secretId, 'kms secret unavailable (agent unreachable or secret not found)');
         if (($config['strict'] ?? false) === true) {
             throw new \RuntimeException("webman-kms: unable to fetch secret [{$secretId}]");

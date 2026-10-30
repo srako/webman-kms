@@ -11,7 +11,8 @@ use Workerman\Timer;
  *
  * 周期性直连本地代理比对各 secretId 的版本指纹；检测到轮换（或代理从不可用
  * 恢复）时向 master 发送 SIGUSR1 触发优雅 reload，使各 worker 重新加载配置、
- * 拿到新凭据。`reloadable=false`：自身不随 reload 重启，保留基线避免重复触发。
+ * 拿到新凭据。`reloadable=false`：自身不随 reload 重启，保留基线避免重复触发；
+ * 因此每轮重读 app.php（Kms::reloadConfig），secret_id 切换后无需重启本进程。
  *
  * 自愈：连续多轮全部拉取失败、或打开 fd 数相对基线异常增长时主动退出，由
  * webman master 重新拉起一个干净进程（兜底潜在资源泄漏，不依赖具体泄漏点）。
@@ -30,6 +31,8 @@ class RotationMonitor
     /** @var int 首次采样到的 fd 数；0 = 尚未采样 */
     private int $baselineFds = 0;
 
+    private bool $idleWarned = false;
+
     public function onWorkerStart(): void
     {
         if (!Kms::enabled()) {
@@ -39,23 +42,33 @@ class RotationMonitor
         if ($interval <= 0) {
             return;
         }
-        $secretIds = Kms::secretIds();
-        if ($secretIds === []) {
-            Logger::warning('kms rotation monitor idle: no resolvable secret ids in `secrets` config');
-            return;
-        }
-        // 启动即建立基线（首次不触发 reload）
-        $this->poll($secretIds);
-        Timer::add($interval, function () use ($secretIds): void {
-            $this->poll($secretIds);
+        // 启动即建立基线（首次不触发 reload）；此后每轮重读配置
+        $this->poll();
+        Timer::add($interval, function (): void {
+            $this->poll();
         });
     }
 
-    /**
-     * @param array<int, string> $secretIds
-     */
-    private function poll(array $secretIds): void
+    private function poll(): void
     {
+        // 本进程 reloadable=false，reload 后不会重启：每轮重读 app.php，
+        // 否则 secret_id 切换后监控仍按启动时的快照轮询旧密钥。
+        Kms::reloadConfig();
+        if (!Kms::enabled()) {
+            return;
+        }
+        $secretIds = Kms::secretIds();
+        if ($secretIds === []) {
+            if (!$this->idleWarned) {
+                $this->idleWarned = true;
+                Logger::warning('kms rotation monitor idle: no resolvable secret ids in `secrets` config');
+            }
+            return;
+        }
+        $this->idleWarned = false;
+        // 配置里已删除的 secretId 不再轮询，避免之后重新加回时按旧指纹误触发 reload
+        $this->fingerprints = array_intersect_key($this->fingerprints, array_flip($secretIds));
+
         $rotated = [];
         $recovered = [];
         $failures = 0;
